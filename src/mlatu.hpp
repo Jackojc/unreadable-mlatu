@@ -29,14 +29,26 @@ namespace mlatu {
 
 // I/O
 namespace mlatu {
-	template <typename T, typename... Ts>
-	inline std::ostream& print(std::ostream& os, T&& arg, Ts&&... args) {
-		return ((os << std::forward<Ts>(args)), ...);
+	namespace detail {
+		template <typename... Ts>
+		inline std::ostream& print_impl(std::ostream& os, Ts&&... xs) {
+			return ((os << std::forward<Ts>(xs)), ..., os);
+		}
+
+		template <typename... Ts>
+		inline std::ostream& println_impl(std::ostream& os, Ts&&... xs) {
+			return ((os << std::forward<Ts>(xs)), ..., (os << '\n'));
+		}
 	}
 
 	template <typename T, typename... Ts>
-	inline std::ostream& println(std::ostream& os, T&& arg, Ts&&... args) {
-		return ((os << std::forward<Ts>(args)), ..., (os << '\n'));
+	inline std::ostream& print(std::ostream& os, T&& x, Ts&&... xs) {
+		return detail::print_impl(os, std::forward<T>(x), std::forward<Ts>(xs)...);
+	}
+
+	template <typename T, typename... Ts>
+	inline std::ostream& println(std::ostream& os, T&& x, Ts&&... xs) {
+		return detail::println_impl(os, std::forward<T>(x), std::forward<Ts>(xs)...);
 	}
 }
 
@@ -93,7 +105,7 @@ namespace mlatu {
 	#undef X
 
 	namespace detail {
-		#define X(a, b) #b,
+		#define X(a, b) b,
 			constexpr const char* LOG2STR[] = { LOG_LEVELS };
 		#undef X
 
@@ -102,10 +114,14 @@ namespace mlatu {
 		}
 	}
 
+	inline std::ostream& operator<<(std::ostream& os, LogLevel x) {
+		return print(os, detail::log2str(x));
+	}
+
 	#define MLATU_LOG(...) \
 		do { [MLATU_VAR(fn_name) = __func__] (size_t MLATU_VAR(x), auto&&... MLATU_VAR(args)) { \
 			MLATU_DEBUG_RUN(( \
-				mlatu::print(std::cerr, MLATU_TRACE, mlatu::detail::log2str(MLATU_VAR(x)), " ") \
+				mlatu::print(std::cerr, MLATU_TRACE, MLATU_VAR(x), " ") \
 			)); \
 			MLATU_DEBUG_RUN(( mlatu::print(std::cerr, "`", MLATU_VAR(fn_name), "`") )); \
 			if constexpr(sizeof...(MLATU_VAR(args)) > 0) { MLATU_DEBUG_RUN( \
@@ -147,17 +163,6 @@ namespace mlatu {
 		return ((std::forward<T>(first) != std::forward<Ts>(rest)) and ...);
 	}
 
-	constexpr auto fnv1a_64(const char* begin, const char* const end) {
-		T hash = 14'695'981'039'346'656'037u;
-
-		while (begin != end) {
-			hash = (hash ^ static_cast<T>(*begin)) * 1'099'511'628'211u;
-			begin++;
-		}
-
-		return hash;
-	}
-
 	namespace detail {
 		constexpr size_t length(const char* str) {
 			const char *ptr = str;
@@ -178,14 +183,32 @@ namespace mlatu {
 		constexpr View(const char* begin_, const char* end_):
 			begin(begin_), end(end_) {}
 
+		constexpr View(const char* begin_, size_t length):
+			begin(begin_), end(begin_ + length) {}
+
 		constexpr View(const char* ptr):
 			begin(ptr), end(ptr + detail::length(ptr)) {}
 	};
 
-	constexpr size_t length(View sv) const {
+	constexpr size_t length(View sv) {
 		return
 			((sv.end - sv.begin) * (sv.end > sv.begin)) +
 			((sv.begin - sv.end) * (sv.begin > sv.end));
+	}
+
+	constexpr bool cmp(View lhs, View rhs) {
+		if (lhs.begin == rhs.begin and lhs.end == rhs.end)
+			return true;
+
+		if (length(lhs) != length(rhs))
+			return false;
+
+		for (size_t i = 0; i < length(lhs); i++) {
+			if (*(lhs.begin + i) != *(rhs.begin + i))
+				return false;
+		}
+
+		return true;
 	}
 
 	[[nodiscard]] constexpr bool empty(View sv) {
@@ -193,7 +216,7 @@ namespace mlatu {
 	}
 
 	inline std::ostream& operator<<(std::ostream& os, View sv) {
-		os.write(sv.begin, sv.size());
+		os.write(sv.begin, length(sv));
 		return os;
 	}
 }
@@ -203,30 +226,30 @@ constexpr mlatu::View operator""_sv(const char* str, size_t n) {
 }
 
 namespace mlatu {
-	constexpr char chr(View sv) {
+	[[nodiscard]] constexpr char chr(View sv) {
 		return *sv.begin;
 	}
 
-	constexpr View stretch(View lhs, View rhs) {
+	[[nodiscard]] constexpr View stretch(View lhs, View rhs) {
 		return { lhs.begin, rhs.end };
 	}
 
-	constexpr View next(View sv) {
-		return { ++sv.begin, sv.end };
+	[[nodiscard]] constexpr View next(View sv) {
+		return { sv.begin + 1, sv.end };
 	}
 
-	constexpr View peek(View sv) {
-		return { sv.begin, next(sv.begin) };
+	[[nodiscard]] constexpr View peek(View sv) {
+		return { sv.begin, sv.begin + 1 };
 	}
 
-	constexpr View take(View& sv) {
+	[[nodiscard]] constexpr View take(View& sv) {
 		const char* ptr = sv.begin;
 		sv = next(sv);
 		return { ptr, sv.begin };
 	}
 
 	template <typename F>
-	constexpr View take_while(View& sv, F&& fn) {
+	[[nodiscard]] constexpr View take_while(View& sv, F&& fn) {
 		View out = sv;
 
 		while (not empty(sv) and fn(peek(sv)))
@@ -239,40 +262,144 @@ namespace mlatu {
 // Errors
 namespace mlatu {
 	#define ERROR_KINDS \
-		X(INF, "[-]") \
-		X(WRN, "[*]") \
-		X(ERR, "[!]") \
-		X(OK,  "[^]")
+		X(UNREACHABLE, "unreachable code") \
+		X(NO_FILE,     "no file specified") \
+		X(READ_FILE,   "could not read file")
 
 	#define X(a, b) a,
-		enum class Error: size_t { ERROR_KINDS };
+		enum class ErrorKind: size_t { ERROR_KINDS };
 	#undef X
 
 	namespace detail {
-		#define X(a, b) #b,
+		#define X(a, b) b,
 			constexpr const char* ERR2STR[] = { ERROR_KINDS };
 		#undef X
 
-		constexpr const char* err2str(Error x) {
+		constexpr const char* err2str(ErrorKind x) {
 			return ERR2STR[static_cast<size_t>(x)];
 		}
 	}
 
+	inline std::ostream& operator<<(std::ostream& os, ErrorKind x) {
+		return print(os, detail::err2str(x));
+	}
+
 	struct Report {
-		Error kind;
+		View sv;
+		ErrorKind kind;
 	};
 
 	template <typename... Ts>
-	[[noreturn]] inline void report(Error x) {
-		throw Report { x };
+	[[noreturn]] inline void report(View sv, ErrorKind x) {
+		throw Report { sv, x };
 	}
 
 	inline std::ostream& report_handler(std::ostream& os, Report x) {
-		println(os, "error: ", detail::err2str(x));
+		return empty(x.sv) ?
+			println(os, "error => ", x.kind):
+			println(os, "error: `", x.sv, "` => ", x.kind);
 	}
 
 	inline std::ostream& operator<<(std::ostream& os, Report x) {
 		return report_handler(os, x);
+	}
+}
+
+namespace mlatu {
+	constexpr bool is_visible(View sv) {
+		char x = chr(sv);
+		return x >= 33 and x <= 126;
+	}
+
+	constexpr bool is_control(View sv) {
+		char x = chr(sv);
+		return x >= 0 and x <= 31;
+	}
+
+	constexpr bool is_whitespace(View sv) {
+		char x = chr(sv);
+		return any(x >= 9 and x <= 13, x == ' ');
+	}
+
+	#define TOKEN_KINDS \
+		X(NONE,       "none") \
+		X(TERMINATOR, "eof") \
+		\
+		X(COPY,    "+") \
+		X(DISCARD, "-") \
+		X(WRAP,    ">") \
+		X(UNWRAP,  "<") \
+		X(COMBINE, ",") \
+		X(SWAP,    "~") \
+		\
+		X(IDENT,  "ident") \
+		X(ASSIGN, "=") \
+		X(END,    ".") \
+		X(LPAREN, "(") \
+		X(RPAREN, ")") \
+
+	#define X(a, b) a,
+		enum class TokenKind: size_t { TOKEN_KINDS };
+	#undef X
+
+	namespace detail {
+		#define X(a, b) b,
+			constexpr const char* TOK2STR[] = { TOKEN_KINDS };
+		#undef X
+
+		constexpr const char* tok2str(TokenKind x) {
+			return TOK2STR[static_cast<size_t>(x)];
+		}
+	}
+
+	inline std::ostream& operator<<(std::ostream& os, TokenKind x) {
+		return print(os, detail::tok2str(x));
+	}
+
+	struct Token {
+		View sv;
+		TokenKind kind;
+
+		constexpr Token(View sv_, TokenKind kind_): sv(sv_), kind(kind_) {}
+	};
+
+	struct Lexer {
+		View src;
+		View sv;
+
+		Token peek;
+		Token prev;
+
+		constexpr Lexer(View src_):
+			src(src_), sv(src_),
+			peek(mlatu::peek(src_), TokenKind::NONE),
+			prev(mlatu::peek(src_), TokenKind::NONE) {}
+	};
+
+	constexpr Token peek(Lexer lx) {
+		return lx.peek;
+	}
+
+	constexpr Token take(Lexer& lx) {
+		View ws = take_while(lx.sv, is_whitespace);
+		Token tok { take(lx.sv), TokenKind::NONE };
+
+		if (empty(lx.sv)) tok.kind = TokenKind::TERMINATOR;
+
+		else if (cmp(tok.sv, "+"_sv)) tok.kind = TokenKind::COPY;
+		else if (cmp(tok.sv, "-"_sv)) tok.kind = TokenKind::DISCARD;
+		else if (cmp(tok.sv, ">"_sv)) tok.kind = TokenKind::WRAP;
+		else if (cmp(tok.sv, "<"_sv)) tok.kind = TokenKind::UNWRAP;
+		else if (cmp(tok.sv, ","_sv)) tok.kind = TokenKind::COMBINE;
+		else if (cmp(tok.sv, "~"_sv)) tok.kind = TokenKind::SWAP;
+		else if (cmp(tok.sv, "("_sv)) tok.kind = TokenKind::LPAREN;
+		else if (cmp(tok.sv, ")"_sv)) tok.kind = TokenKind::RPAREN;
+		else if (cmp(tok.sv, "="_sv)) tok.kind = TokenKind::ASSIGN;
+		else if (cmp(tok.sv, "."_sv)) tok.kind = TokenKind::END;
+
+		else tok.kind = TokenKind::IDENT;
+
+		return tok;
 	}
 }
 
