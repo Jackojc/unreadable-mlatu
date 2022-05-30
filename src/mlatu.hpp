@@ -533,28 +533,18 @@ namespace mlatu {
 				});
 
 				auto it = terms.begin();
+				auto rit = ctx.rules.begin();
 
-				for (auto rit = ctx.rules.begin(); rit != ctx.rules.end();) {
+				while (it != terms.end()) {
 					auto& [lhs, rhs] = *rit;
-
-					if (lhs.size() > terms.size()) {
-						++rit;
-						continue;
-					}
-
-					if (it == terms.end())
-						break;
-
 					MLATU_LOG(LogLevel::INF, "checking ", lhs, " against ", Terms { it, terms.end() });
 
-					bool match = std::equal(
-						it, it + lhs.size(),
-						lhs.begin(), lhs.end());
+					auto end = std::min(it + lhs.size(), terms.end());
 
-					if (not match) {
+					if (not std::equal(it, end, lhs.begin(), lhs.end())) {
 						++rit;
 
-						if (rit == ctx.rules.end()) {
+						if (rit != ctx.rules.end()) {
 							MLATU_LOG(LogLevel::ERR, MLATU_BOLD "no matches!" MLATU_RESET);
 							it++;
 							rit = ctx.rules.begin();
@@ -565,12 +555,10 @@ namespace mlatu {
 
 					MLATU_LOG(LogLevel::WRN, MLATU_BOLD "  match! ", lhs, " => ", rhs, MLATU_RESET);
 
-					size_t off = std::distance(terms.begin(), it);
-
-					it = terms.erase(it, it + lhs.size());
+					it = terms.erase(it, end);
 					it = terms.insert(it, rhs.begin(), rhs.end());
 
-					it = terms.begin() + off;
+					it = terms.begin();
 					rit = ctx.rules.begin();
 
 					MLATU_LOG(LogLevel::OK, "    terms = ", terms);
