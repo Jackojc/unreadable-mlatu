@@ -1,7 +1,10 @@
 #include <utility>
+#include <algorithm>
+#include <vector>
 #include <string>
 #include <string_view>
 #include <filesystem>
+#include <chrono>
 #include <iostream>
 #include <fstream>
 
@@ -33,6 +36,30 @@ int main(int argc, const char* argv[]) {
 
 		std::string src = ss.str();
 		View sv { src.data(), src.size() };
+
+		auto t1 = std::chrono::steady_clock::now();
+
+		Lexer lx { sv };
+		Token tok = take(lx);  // Prepare the lexer.
+
+		Context ctx {};
+		Terms ts = execute(ctx, lx);
+
+		// for (Token x: ts)
+		// 	println(std::cout, x.sv);
+
+		// for (auto& [lhs, rhs]: ctx.rules) {
+		// 	for (Token x: lhs)
+		// 		print(std::cout, x.sv, " ");
+		// 	print(std::cout, "=> ");
+
+		// 	for (Token x: rhs)
+		// 		print(std::cout, x.sv, " ");
+		// 	print(std::cout, '\n');
+		// }
+
+		auto t2 = std::chrono::steady_clock::now();
+		MLATU_LOG(LogLevel::OK, std::chrono::duration<double, std::micro> { t2 - t1 }.count(), "µs");
 	}
 
 	catch (Report x) {

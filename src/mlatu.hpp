@@ -8,8 +8,10 @@
 	the preprocessor to track down files and
 	potentially include them multiple times.
 
-	#include <iostream>
 	#include <utility>
+	#include <algorithm>
+	#include <vector>
+	#include <iostream>
 	#include <cstddef>
 	#include <cstdint>
 */
@@ -66,7 +68,7 @@ namespace mlatu {
 	#define MLATU_CYAN    "\x1b[36m"
 	#define MLATU_WHITE   "\x1b[37m"
 
-	#ifndef MLATU_DISABLE_ASSERT
+	#ifndef NDEBUG
 		namespace detail {
 			template <typename T> inline decltype(auto) dbg_impl(
 				const char* file,
@@ -95,10 +97,10 @@ namespace mlatu {
 	#endif
 
 	#define LOG_LEVELS \
-		X(INF, "[-]") \
-		X(WRN, "[*]") \
-		X(ERR, "[!]") \
-		X(OK,  "[^]")
+		X(INF, MLATU_RESET "[-]") \
+		X(WRN, MLATU_BLUE  "[*]") \
+		X(ERR, MLATU_RED   "[!]") \
+		X(OK,  MLATU_GREEN "[^]")
 
 	#define X(a, b) a,
 		enum class LogLevel: size_t { LOG_LEVELS };
@@ -119,15 +121,15 @@ namespace mlatu {
 	}
 
 	#define MLATU_LOG(...) \
-		do { [MLATU_VAR(fn_name) = __func__] (size_t MLATU_VAR(x), auto&&... MLATU_VAR(args)) { \
-			MLATU_DEBUG_RUN(( \
-				mlatu::print(std::cerr, MLATU_TRACE, MLATU_VAR(x), " ") \
+		do { [MLATU_VAR(fn_name) = __func__] (LogLevel MLATU_VAR(x), auto&&... MLATU_VAR(args)) { \
+			MLATU_DBG_RUN(( \
+				mlatu::print(std::cerr, MLATU_VAR(x), " ", MLATU_TRACE) \
 			)); \
-			MLATU_DEBUG_RUN(( mlatu::print(std::cerr, "`", MLATU_VAR(fn_name), "`") )); \
-			if constexpr(sizeof...(MLATU_VAR(args)) > 0) { MLATU_DEBUG_RUN( \
-				(mlatu::print(std::cerr, std::forward<decltype(MLATU_VAR(args))>(MLATU_VAR(args))...)) \
+			MLATU_DBG_RUN(( mlatu::print(std::cerr, "`", MLATU_VAR(fn_name), "`" MLATU_RESET) )); \
+			if constexpr(sizeof...(MLATU_VAR(args)) > 0) { MLATU_DBG_RUN( \
+				(mlatu::print(std::cerr, " ", std::forward<decltype(MLATU_VAR(args))>(MLATU_VAR(args))...)) \
 			); } \
-			MLATU_DEBUG_RUN(( mlatu::println(std::cerr, MLATU_RESET) )); \
+			MLATU_DBG_RUN(( mlatu::print(std::cerr, '\n') )); \
 		} ( __VA_ARGS__ ); } while (0)
 }
 
@@ -262,9 +264,18 @@ namespace mlatu {
 // Errors
 namespace mlatu {
 	#define ERROR_KINDS \
-		X(UNREACHABLE, "unreachable code") \
-		X(NO_FILE,     "no file specified") \
-		X(READ_FILE,   "could not read file")
+		X(UNREACHABLE,      "unreachable code") \
+		X(NOT_IMPLEMENTED,  "not implemented") \
+		X(NO_FILE,          "no file specified") \
+		X(READ_FILE,        "could not read file") \
+		X(UNKNOWN_CHAR,     "unknown character") \
+		X(EXPECT_ASSIGN,    "expected `=`") \
+		X(EXPECT_END,       "expected `.`") \
+		X(EXPECT_TERM,      "expected term") \
+		X(EXPECT_RPAREN,    "expected `)`") \
+		X(EXPECT_STATEMENT, "expected `?` or `=`") \
+		X(QUOTED_TERM,      "left side of rule contains quoted term") \
+		X(EXPECT_NQ_TERM,   "expected non-quote term")
 
 	#define X(a, b) a,
 		enum class ErrorKind: size_t { ERROR_KINDS };
@@ -290,7 +301,7 @@ namespace mlatu {
 	};
 
 	template <typename... Ts>
-	[[noreturn]] inline void report(View sv, ErrorKind x) {
+	[[noreturn]] constexpr void report(View sv, ErrorKind x) {
 		throw Report { sv, x };
 	}
 
@@ -321,6 +332,14 @@ namespace mlatu {
 		return any(x >= 9 and x <= 13, x == ' ');
 	}
 
+	constexpr bool is_primitive(View sv) {
+		return cmp_any(chr(sv), '+', '-', '<', '>', ',', '~');
+	}
+
+	constexpr bool is_statement(View sv) {
+		return cmp_any(chr(sv), '(', ')', '?', '=', '.');
+	}
+
 	#define TOKEN_KINDS \
 		X(NONE,       "none") \
 		X(TERMINATOR, "eof") \
@@ -335,6 +354,7 @@ namespace mlatu {
 		X(IDENT,  "ident") \
 		X(ASSIGN, "=") \
 		X(END,    ".") \
+		X(QUERY,  "?") \
 		X(LPAREN, "(") \
 		X(RPAREN, ")") \
 
@@ -360,8 +380,13 @@ namespace mlatu {
 		View sv;
 		TokenKind kind;
 
-		constexpr Token(View sv_, TokenKind kind_): sv(sv_), kind(kind_) {}
+		constexpr Token(View sv_, TokenKind kind_):
+			sv(sv_), kind(kind_) {}
 	};
+
+	constexpr bool operator==(Token lhs, Token rhs) {
+		return lhs.kind == rhs.kind and cmp(lhs.sv, rhs.sv);
+	}
 
 	struct Lexer {
 		View src;
@@ -376,30 +401,205 @@ namespace mlatu {
 			prev(mlatu::peek(src_), TokenKind::NONE) {}
 	};
 
-	constexpr Token peek(Lexer lx) {
-		return lx.peek;
+	[[nodiscard]] inline Token take(Lexer& lx) {
+		View ws = take_while(lx.sv, is_whitespace);
+		Token tok { peek(lx.sv), TokenKind::NONE };
+
+		if (empty(lx.sv) or cmp(tok.sv, "\0"_sv))
+			tok.kind = TokenKind::TERMINATOR;
+
+		else if (cmp(tok.sv, "#"_sv)) {
+			View comment = take_while(lx.sv, [] (View sv) {
+				return not cmp(sv, "\n"_sv);
+			});
+
+			return take(lx);
+		}
+
+		else if (cmp(tok.sv, "+"_sv)) { tok.kind = TokenKind::COPY;    lx.sv = next(lx.sv); }
+		else if (cmp(tok.sv, "-"_sv)) { tok.kind = TokenKind::DISCARD; lx.sv = next(lx.sv); }
+		else if (cmp(tok.sv, ">"_sv)) { tok.kind = TokenKind::WRAP;    lx.sv = next(lx.sv); }
+		else if (cmp(tok.sv, "<"_sv)) { tok.kind = TokenKind::UNWRAP;  lx.sv = next(lx.sv); }
+		else if (cmp(tok.sv, ","_sv)) { tok.kind = TokenKind::COMBINE; lx.sv = next(lx.sv); }
+		else if (cmp(tok.sv, "~"_sv)) { tok.kind = TokenKind::SWAP;    lx.sv = next(lx.sv); }
+
+		else if (cmp(tok.sv, "("_sv)) { tok.kind = TokenKind::LPAREN;  lx.sv = next(lx.sv); }
+		else if (cmp(tok.sv, ")"_sv)) { tok.kind = TokenKind::RPAREN;  lx.sv = next(lx.sv); }
+		else if (cmp(tok.sv, "?"_sv)) { tok.kind = TokenKind::QUERY;   lx.sv = next(lx.sv); }
+		else if (cmp(tok.sv, "="_sv)) { tok.kind = TokenKind::ASSIGN;  lx.sv = next(lx.sv); }
+		else if (cmp(tok.sv, "."_sv)) { tok.kind = TokenKind::END;     lx.sv = next(lx.sv); }
+
+		else if (is_visible(tok.sv)) {
+			tok.kind = TokenKind::IDENT;
+			tok.sv = take_while(lx.sv, [] (View sv) {
+				return
+					is_visible(sv) and
+					none(is_primitive(sv), is_statement(sv));
+			});
+		}
+
+		else
+			report(tok.sv, ErrorKind::UNKNOWN_CHAR);
+
+		Token out = lx.peek;
+
+		lx.prev = lx.peek;
+		lx.peek = tok;
+
+		return out;
 	}
 
-	constexpr Token take(Lexer& lx) {
-		View ws = take_while(lx.sv, is_whitespace);
-		Token tok { take(lx.sv), TokenKind::NONE };
+	constexpr decltype(auto) is(TokenKind kind) {
+		return [=] (Token other) { return kind == other.kind; };
+	}
 
-		if (empty(lx.sv)) tok.kind = TokenKind::TERMINATOR;
+	template <typename F> constexpr void expect(Lexer& lx, F&& fn, ErrorKind x) {
+		if (not fn(lx.peek))
+			report(lx.peek.sv, x);
+	}
+}
 
-		else if (cmp(tok.sv, "+"_sv)) tok.kind = TokenKind::COPY;
-		else if (cmp(tok.sv, "-"_sv)) tok.kind = TokenKind::DISCARD;
-		else if (cmp(tok.sv, ">"_sv)) tok.kind = TokenKind::WRAP;
-		else if (cmp(tok.sv, "<"_sv)) tok.kind = TokenKind::UNWRAP;
-		else if (cmp(tok.sv, ","_sv)) tok.kind = TokenKind::COMBINE;
-		else if (cmp(tok.sv, "~"_sv)) tok.kind = TokenKind::SWAP;
-		else if (cmp(tok.sv, "("_sv)) tok.kind = TokenKind::LPAREN;
-		else if (cmp(tok.sv, ")"_sv)) tok.kind = TokenKind::RPAREN;
-		else if (cmp(tok.sv, "="_sv)) tok.kind = TokenKind::ASSIGN;
-		else if (cmp(tok.sv, "."_sv)) tok.kind = TokenKind::END;
+namespace mlatu {
+	using Terms = std::vector<Token>;
 
-		else tok.kind = TokenKind::IDENT;
+	struct Context {
+		std::vector<std::pair<Terms, Terms>> rules;
+	};
 
-		return tok;
+	constexpr bool is_nq_term(Token x) {
+		return cmp_any(x.kind,
+			TokenKind::COPY,
+			TokenKind::DISCARD,
+			TokenKind::WRAP,
+			TokenKind::UNWRAP,
+			TokenKind::COMBINE,
+			TokenKind::SWAP,
+			TokenKind::IDENT);
+	}
+
+	constexpr bool is_term(Token x) {
+		return any(is_nq_term(x), cmp_any(x.kind,
+			TokenKind::LPAREN));
+	}
+
+	inline void term(Context& ctx, Lexer& lx, Terms& terms, bool& quoted) {
+		expect(lx, is_term, ErrorKind::EXPECT_TERM);
+
+		Token tok = take(lx);
+		auto [sv, kind] = tok;
+
+		switch (kind) {
+			case TokenKind::COPY:    break;
+			case TokenKind::DISCARD: break;
+			case TokenKind::WRAP:    break;
+			case TokenKind::UNWRAP:  break;
+			case TokenKind::COMBINE: break;
+			case TokenKind::SWAP:    break;
+
+			case TokenKind::IDENT: {
+				terms.emplace_back(tok);
+			} break;
+
+			case TokenKind::LPAREN: {
+				quoted = true;
+
+				while (is_term(lx.peek))
+					term(ctx, lx, terms, quoted);
+
+				expect(lx, is(TokenKind::RPAREN), ErrorKind::EXPECT_RPAREN);
+				Token rparen = take(lx);
+			} break;
+
+			default: {
+
+			} break;
+		}
+	}
+
+	[[nodiscard]] inline Terms execute(Context& ctx, Lexer& lx) {
+		Terms terms;
+		terms.reserve(25);
+
+		while (lx.peek.kind != TokenKind::TERMINATOR) {
+			bool quoted = false;
+
+			do
+				term(ctx, lx, terms, quoted);
+			while (is_term(lx.peek));
+
+			if (lx.peek.kind == TokenKind::QUERY) {
+				Token query = take(lx);
+
+				std::sort(ctx.rules.begin(), ctx.rules.end(), [] (auto& lhs, auto& rhs) {
+					return lhs.first.size() > rhs.first.size();
+				});
+
+				auto end = terms.end();
+
+				for (auto it = terms.begin(); it != end;) {
+					bool any = true;
+
+					for (auto& [lhs, rhs]: ctx.rules) {
+						bool match = std::equal(it, end, lhs.begin(), lhs.end());
+
+						if (match) {
+							for (; it != end; ++it)
+								it->kind = TokenKind::NONE;
+
+							terms.insert(it, rhs.begin(), rhs.end());
+
+							it = terms.begin();
+							end = terms.end();
+
+							terms.erase(std::remove_if(terms.begin(), terms.end(), [] (auto& x) {
+								return x.kind == TokenKind::NONE;
+							}), terms.end());
+
+							break;
+						}
+
+						any = any and match;
+					}
+
+					end--;
+
+					if (not any) {
+						it++;
+						end = terms.end();
+					}
+				}
+
+				for (Token tok: terms)
+					print(std::cout, tok.sv, " ");
+				print(std::cout, '\n');
+			}
+
+			else if (lx.peek.kind == TokenKind::ASSIGN) {
+				if (quoted)
+					report(lx.peek.sv, ErrorKind::QUOTED_TERM);
+
+				auto sep = terms.end();   // End of lhs, beginning of rhs.
+				Token assign = take(lx);
+
+				while (is_term(lx.peek))
+					term(ctx, lx, terms, quoted);
+
+				expect(lx, is(TokenKind::END), ErrorKind::EXPECT_END);
+				Token end = take(lx);
+
+				auto& [lhs, rhs] = ctx.rules.emplace_back();
+
+				lhs.insert(lhs.end(), terms.begin(), sep);
+				rhs.insert(rhs.end(), sep, terms.end());
+			}
+
+			else
+				report(lx.peek.sv, ErrorKind::EXPECT_STATEMENT);
+
+			terms.clear();  // Important.
+		}
+
+		return terms;
 	}
 }
 
