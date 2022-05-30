@@ -462,6 +462,16 @@ namespace mlatu {
 namespace mlatu {
 	using Terms = std::vector<Token>;
 
+	inline std::ostream& operator<<(std::ostream& os, const Terms& x) {
+		// return print(os, detail::tok2str(x));
+		print(os, '[', x.front().sv);
+
+		for (auto it = x.begin() + 1; it != x.end(); ++it)
+			print(os, " ", it->sv);
+
+		return print(os, ']');
+	}
+
 	struct Context {
 		std::vector<std::pair<Terms, Terms>> rules;
 	};
@@ -488,35 +498,23 @@ namespace mlatu {
 		Token tok = take(lx);
 		auto [sv, kind] = tok;
 
-		switch (kind) {
-			case TokenKind::COPY:    break;
-			case TokenKind::DISCARD: break;
-			case TokenKind::WRAP:    break;
-			case TokenKind::UNWRAP:  break;
-			case TokenKind::COMBINE: break;
-			case TokenKind::SWAP:    break;
+		terms.emplace_back(tok);
 
-			case TokenKind::IDENT: {
-				terms.emplace_back(tok);
-			} break;
+		if (kind == TokenKind::LPAREN) {
+			quoted = true;
 
-			case TokenKind::LPAREN: {
-				quoted = true;
+			while (is_term(lx.peek))
+				term(ctx, lx, terms, quoted);
 
-				while (is_term(lx.peek))
-					term(ctx, lx, terms, quoted);
+			expect(lx, is(TokenKind::RPAREN), ErrorKind::EXPECT_RPAREN);
+			Token rparen = take(lx);
 
-				expect(lx, is(TokenKind::RPAREN), ErrorKind::EXPECT_RPAREN);
-				Token rparen = take(lx);
-			} break;
-
-			default: {
-
-			} break;
+			terms.emplace_back(rparen);
 		}
 	}
 
-	[[nodiscard]] inline Terms execute(Context& ctx, Lexer& lx) {
+	template <typename F>
+	[[nodiscard]] inline Terms execute(Context& ctx, Lexer& lx, F&& cb) {
 		Terms terms;
 		terms.reserve(25);
 
@@ -534,44 +532,51 @@ namespace mlatu {
 					return lhs.first.size() > rhs.first.size();
 				});
 
-				auto end = terms.end();
+				auto it = terms.begin();
 
-				for (auto it = terms.begin(); it != end;) {
-					bool any = true;
+				for (auto rit = ctx.rules.begin(); rit != ctx.rules.end();) {
+					auto& [lhs, rhs] = *rit;
 
-					for (auto& [lhs, rhs]: ctx.rules) {
-						bool match = std::equal(it, end, lhs.begin(), lhs.end());
+					if (lhs.size() > terms.size()) {
+						++rit;
+						continue;
+					}
 
-						if (match) {
-							for (; it != end; ++it)
-								it->kind = TokenKind::NONE;
+					if (it == terms.end())
+						break;
 
-							terms.insert(it, rhs.begin(), rhs.end());
+					MLATU_LOG(LogLevel::INF, "checking ", lhs, " against ", Terms { it, terms.end() });
 
-							it = terms.begin();
-							end = terms.end();
+					bool match = std::equal(
+						it, it + lhs.size(),
+						lhs.begin(), lhs.end());
 
-							terms.erase(std::remove_if(terms.begin(), terms.end(), [] (auto& x) {
-								return x.kind == TokenKind::NONE;
-							}), terms.end());
+					if (not match) {
+						++rit;
 
-							break;
+						if (rit == ctx.rules.end()) {
+							MLATU_LOG(LogLevel::ERR, MLATU_BOLD "no matches!" MLATU_RESET);
+							it++;
+							rit = ctx.rules.begin();
 						}
 
-						any = any and match;
+						continue;
 					}
 
-					end--;
+					MLATU_LOG(LogLevel::WRN, MLATU_BOLD "  match! ", lhs, " => ", rhs, MLATU_RESET);
 
-					if (not any) {
-						it++;
-						end = terms.end();
-					}
+					size_t off = std::distance(terms.begin(), it);
+
+					it = terms.erase(it, it + lhs.size());
+					it = terms.insert(it, rhs.begin(), rhs.end());
+
+					it = terms.begin() + off;
+					rit = ctx.rules.begin();
+
+					MLATU_LOG(LogLevel::OK, "    terms = ", terms);
 				}
 
-				for (Token tok: terms)
-					print(std::cout, tok.sv, " ");
-				print(std::cout, '\n');
+				cb(terms);
 			}
 
 			else if (lx.peek.kind == TokenKind::ASSIGN) {

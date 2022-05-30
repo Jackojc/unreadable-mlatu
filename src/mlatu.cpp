@@ -43,20 +43,9 @@ int main(int argc, const char* argv[]) {
 		Token tok = take(lx);  // Prepare the lexer.
 
 		Context ctx {};
-		Terms ts = execute(ctx, lx);
-
-		// for (Token x: ts)
-		// 	println(std::cout, x.sv);
-
-		// for (auto& [lhs, rhs]: ctx.rules) {
-		// 	for (Token x: lhs)
-		// 		print(std::cout, x.sv, " ");
-		// 	print(std::cout, "=> ");
-
-		// 	for (Token x: rhs)
-		// 		print(std::cout, x.sv, " ");
-		// 	print(std::cout, '\n');
-		// }
+		Terms ts = execute(ctx, lx, [&] (Terms x) {
+			println(std::cout, x);
+		});
 
 		auto t2 = std::chrono::steady_clock::now();
 		MLATU_LOG(LogLevel::OK, std::chrono::duration<double, std::micro> { t2 - t1 }.count(), "µs");
