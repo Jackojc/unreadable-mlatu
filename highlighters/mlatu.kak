@@ -9,8 +9,8 @@ provide-module -override mlatu %{
 	add-highlighter shared/mlatu/comment/ fill comment
 
 	# primitives and statements
-	add-highlighter shared/mlatu/other/ regex "[\?=.()]"    0:keyword
-	add-highlighter shared/mlatu/other/ regex "[+\-~,<>]" 0:operator
+	add-highlighter shared/mlatu/other/ regex "[\?=.()]" 0:keyword
+	add-highlighter shared/mlatu/other/ regex "[\*]"     0:operator
 }
 
 hook global BufCreate .*\.(mlt) %{ set-option buffer filetype mlatu }

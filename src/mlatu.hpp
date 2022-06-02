@@ -252,7 +252,7 @@ namespace mlatu {
 
 	template <typename F>
 	[[nodiscard]] constexpr View take_while(View& sv, F&& fn) {
-		View out = sv;
+		View out { sv.begin, sv.begin };
 
 		while (not empty(sv) and fn(peek(sv)))
 			out = stretch(out, take(sv));
@@ -274,8 +274,7 @@ namespace mlatu {
 		X(EXPECT_TERM,      "expected term") \
 		X(EXPECT_RPAREN,    "expected `)`") \
 		X(EXPECT_STATEMENT, "expected `?` or `=`") \
-		X(QUOTED_TERM,      "left side of rule contains quoted term") \
-		X(EXPECT_NQ_TERM,   "expected non-quote term")
+		X(EXPECT_IDENT,     "expected identifier")
 
 	#define X(a, b) a,
 		enum class ErrorKind: size_t { ERROR_KINDS };
@@ -332,26 +331,17 @@ namespace mlatu {
 		return any(x >= 9 and x <= 13, x == ' ');
 	}
 
-	constexpr bool is_primitive(View sv) {
-		return cmp_any(chr(sv), '+', '-', '<', '>', ',', '~');
-	}
-
-	constexpr bool is_statement(View sv) {
-		return cmp_any(chr(sv), '(', ')', '?', '=', '.');
+	constexpr bool is_reserved(View sv) {
+		return cmp_any(chr(sv), '*', '(', ')', '?', '=', '.');
 	}
 
 	#define TOKEN_KINDS \
 		X(NONE,       "none") \
 		X(TERMINATOR, "eof") \
 		\
-		X(COPY,    "+") \
-		X(DISCARD, "-") \
-		X(WRAP,    ">") \
-		X(UNWRAP,  "<") \
-		X(COMBINE, ",") \
-		X(SWAP,    "~") \
-		\
 		X(IDENT,  "ident") \
+		X(MANY,   "*") \
+		X(SINGLE, "'") \
 		X(ASSIGN, "=") \
 		X(END,    ".") \
 		X(QUERY,  "?") \
@@ -384,8 +374,14 @@ namespace mlatu {
 			sv(sv_), kind(kind_) {}
 	};
 
+	inline std::ostream& operator<<(std::ostream& os, Token x) {
+		return print(os, '{', x.kind, ",'", x.sv, "'}");
+	}
+
 	constexpr bool operator==(Token lhs, Token rhs) {
-		return lhs.kind == rhs.kind and cmp(lhs.sv, rhs.sv);
+		return
+			(lhs.kind == rhs.kind and
+			cmp(lhs.sv, rhs.sv));
 	}
 
 	struct Lexer {
@@ -416,25 +412,30 @@ namespace mlatu {
 			return take(lx);
 		}
 
-		else if (cmp(tok.sv, "+"_sv)) { tok.kind = TokenKind::COPY;    lx.sv = next(lx.sv); }
-		else if (cmp(tok.sv, "-"_sv)) { tok.kind = TokenKind::DISCARD; lx.sv = next(lx.sv); }
-		else if (cmp(tok.sv, ">"_sv)) { tok.kind = TokenKind::WRAP;    lx.sv = next(lx.sv); }
-		else if (cmp(tok.sv, "<"_sv)) { tok.kind = TokenKind::UNWRAP;  lx.sv = next(lx.sv); }
-		else if (cmp(tok.sv, ","_sv)) { tok.kind = TokenKind::COMBINE; lx.sv = next(lx.sv); }
-		else if (cmp(tok.sv, "~"_sv)) { tok.kind = TokenKind::SWAP;    lx.sv = next(lx.sv); }
-
 		else if (cmp(tok.sv, "("_sv)) { tok.kind = TokenKind::LPAREN;  lx.sv = next(lx.sv); }
 		else if (cmp(tok.sv, ")"_sv)) { tok.kind = TokenKind::RPAREN;  lx.sv = next(lx.sv); }
 		else if (cmp(tok.sv, "?"_sv)) { tok.kind = TokenKind::QUERY;   lx.sv = next(lx.sv); }
 		else if (cmp(tok.sv, "="_sv)) { tok.kind = TokenKind::ASSIGN;  lx.sv = next(lx.sv); }
 		else if (cmp(tok.sv, "."_sv)) { tok.kind = TokenKind::END;     lx.sv = next(lx.sv); }
 
+		else if (cmp(tok.sv, "*"_sv)) {
+			tok.kind = TokenKind::MANY;
+			View star = take(lx.sv);
+
+			tok.sv = take_while(lx.sv, [] (View sv) {
+				return is_visible(sv) and not is_reserved(sv);
+			});
+
+			if (empty(tok.sv))
+				report(tok.sv, ErrorKind::EXPECT_IDENT);
+
+			tok.sv = stretch(star, tok.sv);
+		}
+
 		else if (is_visible(tok.sv)) {
 			tok.kind = TokenKind::IDENT;
 			tok.sv = take_while(lx.sv, [] (View sv) {
-				return
-					is_visible(sv) and
-					none(is_primitive(sv), is_statement(sv));
+				return is_visible(sv) and not is_reserved(sv);
 			});
 		}
 
@@ -442,6 +443,8 @@ namespace mlatu {
 			report(tok.sv, ErrorKind::UNKNOWN_CHAR);
 
 		Token out = lx.peek;
+
+		// MLATU_LOG(LogLevel::INF, "token: ", out);
 
 		lx.prev = lx.peek;
 		lx.peek = tok;
@@ -463,7 +466,6 @@ namespace mlatu {
 	using Terms = std::vector<Token>;
 
 	inline std::ostream& operator<<(std::ostream& os, const Terms& x) {
-		// return print(os, detail::tok2str(x));
 		print(os, '[', x.front().sv);
 
 		for (auto it = x.begin() + 1; it != x.end(); ++it)
@@ -476,23 +478,14 @@ namespace mlatu {
 		std::vector<std::pair<Terms, Terms>> rules;
 	};
 
-	constexpr bool is_nq_term(Token x) {
+	constexpr bool is_term(Token x) {
 		return cmp_any(x.kind,
-			TokenKind::COPY,
-			TokenKind::DISCARD,
-			TokenKind::WRAP,
-			TokenKind::UNWRAP,
-			TokenKind::COMBINE,
-			TokenKind::SWAP,
+			TokenKind::LPAREN,
+			TokenKind::MANY,
 			TokenKind::IDENT);
 	}
 
-	constexpr bool is_term(Token x) {
-		return any(is_nq_term(x), cmp_any(x.kind,
-			TokenKind::LPAREN));
-	}
-
-	inline void term(Context& ctx, Lexer& lx, Terms& terms, bool& quoted) {
+	inline void term(Context& ctx, Lexer& lx, Terms& terms) {
 		expect(lx, is_term, ErrorKind::EXPECT_TERM);
 
 		Token tok = take(lx);
@@ -501,10 +494,8 @@ namespace mlatu {
 		terms.emplace_back(tok);
 
 		if (kind == TokenKind::LPAREN) {
-			quoted = true;
-
 			while (is_term(lx.peek))
-				term(ctx, lx, terms, quoted);
+				term(ctx, lx, terms);
 
 			expect(lx, is(TokenKind::RPAREN), ErrorKind::EXPECT_RPAREN);
 			Token rparen = take(lx);
@@ -514,37 +505,65 @@ namespace mlatu {
 	}
 
 	template <typename F>
-	[[nodiscard]] inline Terms execute(Context& ctx, Lexer& lx, F&& cb) {
+	[[nodiscard]] inline Terms execute(Context& ctx, Lexer& lx, const F& cb) {
 		Terms terms;
-		terms.reserve(25);
 
 		while (lx.peek.kind != TokenKind::TERMINATOR) {
-			bool quoted = false;
-
 			do
-				term(ctx, lx, terms, quoted);
+				term(ctx, lx, terms);
 			while (is_term(lx.peek));
 
 			if (lx.peek.kind == TokenKind::QUERY) {
 				Token query = take(lx);
 
-				std::sort(ctx.rules.begin(), ctx.rules.end(), [] (auto& lhs, auto& rhs) {
+				std::stable_sort(ctx.rules.begin(), ctx.rules.end(), [] (auto& lhs, auto& rhs) {
 					return lhs.first.size() > rhs.first.size();
 				});
 
 				auto it = terms.begin();
 				auto rit = ctx.rules.begin();
 
+				if (ctx.rules.empty())
+					continue;
+
 				while (it != terms.end()) {
 					auto& [lhs, rhs] = *rit;
+
 					MLATU_LOG(LogLevel::INF, "checking ", lhs, " against ", Terms { it, terms.end() });
 
-					auto end = std::min(it + lhs.size(), terms.end());
+					auto rewrite_begin = it;
+					auto rewrite_end = it;
 
-					if (not std::equal(it, end, lhs.begin(), lhs.end())) {
+					bool match = [&] (auto term_it, auto term_end, auto rule_it, auto rule_end) {
+						while (term_it != term_end and rule_it != rule_end) {
+							MLATU_LOG(LogLevel::WRN, *term_it, " == ", *rule_it);
+
+							if (rule_it->kind == TokenKind::MANY) {
+								rule_it++;
+
+								while (term_it->kind != rule_it->kind)
+									term_it++;
+
+								term_it++;
+
+								if (term_it == term_end)
+									return false;
+							}
+
+							else if (not (*term_it == *rule_it))
+								return false;
+
+							term_it++, rule_it++;
+						}
+
+						rewrite_end = term_it;
+						return true;
+					} (it, terms.end(), lhs.begin(), lhs.end());
+
+					if (not match) {
 						++rit;
 
-						if (rit != ctx.rules.end()) {
+						if (rit == ctx.rules.end()) {
 							MLATU_LOG(LogLevel::ERR, MLATU_BOLD "no matches!" MLATU_RESET);
 							it++;
 							rit = ctx.rules.begin();
@@ -555,8 +574,8 @@ namespace mlatu {
 
 					MLATU_LOG(LogLevel::WRN, MLATU_BOLD "  match! ", lhs, " => ", rhs, MLATU_RESET);
 
-					it = terms.erase(it, end);
-					it = terms.insert(it, rhs.begin(), rhs.end());
+					it = terms.erase(rewrite_begin, rewrite_end);
+					it = terms.insert(rewrite_begin, rhs.begin(), rhs.end());
 
 					it = terms.begin();
 					rit = ctx.rules.begin();
@@ -564,26 +583,24 @@ namespace mlatu {
 					MLATU_LOG(LogLevel::OK, "    terms = ", terms);
 				}
 
-				cb(terms);
+				cb(terms);  // User callback.
 			}
 
 			else if (lx.peek.kind == TokenKind::ASSIGN) {
-				if (quoted)
-					report(lx.peek.sv, ErrorKind::QUOTED_TERM);
+				size_t sep = std::distance(terms.begin(), terms.end());
 
-				auto sep = terms.end();   // End of lhs, beginning of rhs.
 				Token assign = take(lx);
 
 				while (is_term(lx.peek))
-					term(ctx, lx, terms, quoted);
+					term(ctx, lx, terms);
 
 				expect(lx, is(TokenKind::END), ErrorKind::EXPECT_END);
 				Token end = take(lx);
 
 				auto& [lhs, rhs] = ctx.rules.emplace_back();
 
-				lhs.insert(lhs.end(), terms.begin(), sep);
-				rhs.insert(rhs.end(), sep, terms.end());
+				lhs.insert(lhs.end(), terms.begin(), terms.begin() + sep);
+				rhs.insert(rhs.end(), terms.begin() + sep, terms.end());
 			}
 
 			else
