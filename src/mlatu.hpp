@@ -531,35 +531,47 @@ namespace mlatu {
 
 					MLATU_LOG(LogLevel::INF, "checking ", lhs, " against ", Terms { it, terms.end() });
 
+					// Rewrite span
 					auto rewrite_begin = it;
 					auto rewrite_end = it;
 
+					// Compare terms to current rule.
 					bool match = [&] (auto term_it, auto term_end, auto rule_it, auto rule_end) {
 						while (term_it != term_end and rule_it != rule_end) {
-							MLATU_LOG(LogLevel::WRN, *term_it, " == ", *rule_it);
+							// MLATU_LOG(LogLevel::WRN, *term_it, " == ", *rule_it);
 
+							// If we find a wildcard term, loop until we
+							// find the next term in the rule _or_ until
+							// we have no more terms.
 							if (rule_it->kind == TokenKind::MANY) {
-								rule_it++;
+								rule_it++; // Next term in rule
 
-								while (term_it->kind != rule_it->kind)
+								// Loop until we hit the next term.
+								while (term_it != term_end and term_it->kind != rule_it->kind)
 									term_it++;
 
 								term_it++;
 
+								// If the wildcard spans the entire array of
+								// terms, return false.
 								if (term_it == term_end)
 									return false;
 							}
 
+							// Check if term matches rule
 							else if (not (*term_it == *rule_it))
 								return false;
 
 							term_it++, rule_it++;
 						}
 
-						rewrite_end = term_it;
+						rewrite_end = term_it;  // Span of terms to rewrite.
 						return true;
 					} (it, terms.end(), lhs.begin(), lhs.end());
 
+					// With no match, we move to the next rule and if we have
+					// checked _all_ rules, we increment the current term iterator
+					// and restart the rule search.
 					if (not match) {
 						++rit;
 
@@ -574,9 +586,11 @@ namespace mlatu {
 
 					MLATU_LOG(LogLevel::WRN, MLATU_BOLD "  match! ", lhs, " => ", rhs, MLATU_RESET);
 
+					// Erase rewrite span and insert the reduction.
 					it = terms.erase(rewrite_begin, rewrite_end);
 					it = terms.insert(rewrite_begin, rhs.begin(), rhs.end());
 
+					// Go back to the beginning.
 					it = terms.begin();
 					rit = ctx.rules.begin();
 
