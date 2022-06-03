@@ -538,32 +538,44 @@ namespace mlatu {
 					// Compare terms to current rule.
 					bool match = [&] (auto term_it, auto term_end, auto rule_it, auto rule_end) {
 						while (term_it != term_end and rule_it != rule_end) {
-							// MLATU_LOG(LogLevel::WRN, *term_it, " == ", *rule_it);
+							// MLATU_LOG(LogLevel::INF, *term_it, " == ", *rule_it);
 
 							// If we find a wildcard term, loop until we
 							// find the next term in the rule _or_ until
 							// we have no more terms.
 							if (rule_it->kind == TokenKind::MANY) {
-								rule_it++; // Next term in rule
+								rule_it++;
+								size_t depth = 1;
+
+								if (term_it->kind != TokenKind::LPAREN)
+									return false;
+								term_it++;
 
 								// Loop until we hit the next term.
-								while (term_it != term_end and term_it->kind != rule_it->kind)
-									term_it++;
+								while (depth > 0) {
+									if      (term_it->kind == TokenKind::LPAREN) depth++;
+									else if (term_it->kind == TokenKind::RPAREN) depth--;
 
-								term_it++;
+									term_it++;
+								}
 
 								// If the wildcard spans the entire array of
 								// terms, return false.
-								if (term_it == term_end)
-									return false;
+								// if (term_it == term_end)
+								// 	return false;
+
+								continue;
 							}
 
 							// Check if term matches rule
 							else if (not (*term_it == *rule_it))
 								return false;
 
-							term_it++, rule_it++;
+							term_it++; rule_it++;
 						}
+
+						if (rule_it != rule_end)
+							return false;
 
 						rewrite_end = term_it;  // Span of terms to rewrite.
 						return true;
