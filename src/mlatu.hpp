@@ -335,7 +335,7 @@ namespace mlatu {
 		return cmp_any(chr(sv), '*', '(', ')', '?', '=', '.');
 	}
 
-	#define TOKEN_KINDS \
+	#define TERM_KINDS \
 		X(NONE,       "none") \
 		X(TERMINATOR, "eof") \
 		\
@@ -349,62 +349,66 @@ namespace mlatu {
 		X(RPAREN, ")") \
 
 	#define X(a, b) a,
-		enum class TokenKind: size_t { TOKEN_KINDS };
+		enum class TermKind: size_t { TERM_KINDS };
 	#undef X
 
 	namespace detail {
 		#define X(a, b) b,
-			constexpr const char* TOK2STR[] = { TOKEN_KINDS };
+			constexpr const char* TOK2STR[] = { TERM_KINDS };
 		#undef X
 
-		constexpr const char* tok2str(TokenKind x) {
+		constexpr const char* trm2str(TermKind x) {
 			return TOK2STR[static_cast<size_t>(x)];
 		}
 	}
 
-	inline std::ostream& operator<<(std::ostream& os, TokenKind x) {
-		return print(os, detail::tok2str(x));
+	inline std::ostream& operator<<(std::ostream& os, TermKind x) {
+		return print(os, detail::trm2str(x));
 	}
 
-	struct Token {
+	struct Term {
 		View sv;
-		TokenKind kind;
+		TermKind kind;
 
-		constexpr Token(View sv_, TokenKind kind_):
+		constexpr Term(View sv_, TermKind kind_):
 			sv(sv_), kind(kind_) {}
 	};
 
-	inline std::ostream& operator<<(std::ostream& os, Token x) {
+	inline std::ostream& operator<<(std::ostream& os, Term x) {
 		return print(os, '{', x.kind, ",'", x.sv, "'}");
 	}
 
-	constexpr bool operator==(Token lhs, Token rhs) {
+	constexpr bool operator==(Term lhs, Term rhs) {
 		return
 			(lhs.kind == rhs.kind and
 			cmp(lhs.sv, rhs.sv));
+	}
+
+	constexpr bool operator!=(Term lhs, Term rhs) {
+		return not(lhs == rhs);
 	}
 
 	struct Lexer {
 		View src;
 		View sv;
 
-		Token peek;
-		Token prev;
+		Term peek;
+		Term prev;
 
 		constexpr Lexer(View src_):
 			src(src_), sv(src_),
-			peek(mlatu::peek(src_), TokenKind::NONE),
-			prev(mlatu::peek(src_), TokenKind::NONE) {}
+			peek(mlatu::peek(src_), TermKind::NONE),
+			prev(mlatu::peek(src_), TermKind::NONE) {}
 	};
 
-	[[nodiscard]] inline Token take(Lexer& lx) {
+	[[nodiscard]] inline Term take(Lexer& lx) {
 		View ws = take_while(lx.sv, is_whitespace);
-		Token tok { peek(lx.sv), TokenKind::NONE };
+		Term trm { peek(lx.sv), TermKind::NONE };
 
-		if (empty(lx.sv) or cmp(tok.sv, "\0"_sv))
-			tok.kind = TokenKind::TERMINATOR;
+		if (empty(lx.sv) or cmp(trm.sv, "\0"_sv))
+			trm.kind = TermKind::TERMINATOR;
 
-		else if (cmp(tok.sv, "#"_sv)) {
+		else if (cmp(trm.sv, "#"_sv)) {
 			View comment = take_while(lx.sv, [] (View sv) {
 				return not cmp(sv, "\n"_sv);
 			});
@@ -412,48 +416,46 @@ namespace mlatu {
 			return take(lx);
 		}
 
-		else if (cmp(tok.sv, "("_sv)) { tok.kind = TokenKind::LPAREN;  lx.sv = next(lx.sv); }
-		else if (cmp(tok.sv, ")"_sv)) { tok.kind = TokenKind::RPAREN;  lx.sv = next(lx.sv); }
-		else if (cmp(tok.sv, "?"_sv)) { tok.kind = TokenKind::QUERY;   lx.sv = next(lx.sv); }
-		else if (cmp(tok.sv, "="_sv)) { tok.kind = TokenKind::ASSIGN;  lx.sv = next(lx.sv); }
-		else if (cmp(tok.sv, "."_sv)) { tok.kind = TokenKind::END;     lx.sv = next(lx.sv); }
+		else if (cmp(trm.sv, "("_sv)) { trm.kind = TermKind::LPAREN;  lx.sv = next(lx.sv); }
+		else if (cmp(trm.sv, ")"_sv)) { trm.kind = TermKind::RPAREN;  lx.sv = next(lx.sv); }
+		else if (cmp(trm.sv, "?"_sv)) { trm.kind = TermKind::QUERY;   lx.sv = next(lx.sv); }
+		else if (cmp(trm.sv, "="_sv)) { trm.kind = TermKind::ASSIGN;  lx.sv = next(lx.sv); }
+		else if (cmp(trm.sv, "."_sv)) { trm.kind = TermKind::END;     lx.sv = next(lx.sv); }
 
-		else if (cmp(tok.sv, "*"_sv)) {
-			tok.kind = TokenKind::MANY;
+		else if (cmp(trm.sv, "*"_sv)) {
+			trm.kind = TermKind::MANY;
 			View star = take(lx.sv);
 
-			tok.sv = take_while(lx.sv, [] (View sv) {
+			trm.sv = take_while(lx.sv, [] (View sv) {
 				return is_visible(sv) and not is_reserved(sv);
 			});
 
-			if (empty(tok.sv))
-				report(tok.sv, ErrorKind::EXPECT_IDENT);
+			if (empty(trm.sv))
+				report(trm.sv, ErrorKind::EXPECT_IDENT);
 
-			tok.sv = stretch(star, tok.sv);
+			trm.sv = stretch(star, trm.sv);
 		}
 
-		else if (is_visible(tok.sv)) {
-			tok.kind = TokenKind::IDENT;
-			tok.sv = take_while(lx.sv, [] (View sv) {
+		else if (is_visible(trm.sv)) {
+			trm.kind = TermKind::IDENT;
+			trm.sv = take_while(lx.sv, [] (View sv) {
 				return is_visible(sv) and not is_reserved(sv);
 			});
 		}
 
 		else
-			report(tok.sv, ErrorKind::UNKNOWN_CHAR);
+			report(trm.sv, ErrorKind::UNKNOWN_CHAR);
 
-		Token out = lx.peek;
-
-		// MLATU_LOG(LogLevel::INF, "token: ", out);
+		Term out = lx.peek;
 
 		lx.prev = lx.peek;
-		lx.peek = tok;
+		lx.peek = trm;
 
 		return out;
 	}
 
-	constexpr decltype(auto) is(TokenKind kind) {
-		return [=] (Token other) { return kind == other.kind; };
+	constexpr decltype(auto) is(TermKind kind) {
+		return [=] (Term other) { return kind == other.kind; };
 	}
 
 	template <typename F> constexpr void expect(Lexer& lx, F&& fn, ErrorKind x) {
@@ -463,7 +465,7 @@ namespace mlatu {
 }
 
 namespace mlatu {
-	using Terms = std::vector<Token>;
+	using Terms = std::vector<Term>;
 
 	inline std::ostream& operator<<(std::ostream& os, const Terms& x) {
 		print(os, '[', x.front().sv);
@@ -478,27 +480,40 @@ namespace mlatu {
 		std::vector<std::pair<Terms, Terms>> rules;
 	};
 
-	constexpr bool is_term(Token x) {
+	constexpr bool is_term(Term x) {
 		return cmp_any(x.kind,
-			TokenKind::LPAREN,
-			TokenKind::MANY,
-			TokenKind::IDENT);
+			TermKind::LPAREN,
+			TermKind::MANY,
+			TermKind::IDENT);
+	}
+
+	inline Terms::iterator match_parens(Terms::iterator it) {
+		size_t depth = 1;
+
+		while (depth > 0) {
+			if      (it->kind == TermKind::LPAREN) depth++;
+			else if (it->kind == TermKind::RPAREN) depth--;
+
+			it++;
+		}
+
+		return it;
 	}
 
 	inline void term(Context& ctx, Lexer& lx, Terms& terms) {
 		expect(lx, is_term, ErrorKind::EXPECT_TERM);
 
-		Token tok = take(lx);
-		auto [sv, kind] = tok;
+		Term trm = take(lx);
+		auto [sv, kind] = trm;
 
-		terms.emplace_back(tok);
+		terms.emplace_back(trm);
 
-		if (kind == TokenKind::LPAREN) {
+		if (kind == TermKind::LPAREN) {
 			while (is_term(lx.peek))
 				term(ctx, lx, terms);
 
-			expect(lx, is(TokenKind::RPAREN), ErrorKind::EXPECT_RPAREN);
-			Token rparen = take(lx);
+			expect(lx, is(TermKind::RPAREN), ErrorKind::EXPECT_RPAREN);
+			Term rparen = take(lx);
 
 			terms.emplace_back(rparen);
 		}
@@ -508,110 +523,76 @@ namespace mlatu {
 	[[nodiscard]] inline Terms execute(Context& ctx, Lexer& lx, const F& cb) {
 		Terms terms;
 
-		while (lx.peek.kind != TokenKind::TERMINATOR) {
+		while (lx.peek.kind != TermKind::TERMINATOR) {
 			do
 				term(ctx, lx, terms);
 			while (is_term(lx.peek));
 
-			if (lx.peek.kind == TokenKind::QUERY) {
-				Token query = take(lx);
+			if (lx.peek.kind == TermKind::QUERY) {
+				Term query = take(lx);
 
 				std::stable_sort(ctx.rules.begin(), ctx.rules.end(), [] (auto& lhs, auto& rhs) {
 					return lhs.first.size() > rhs.first.size();
 				});
 
-				auto it = terms.begin();
-				auto rit = ctx.rules.begin();
-
 				if (ctx.rules.empty())
 					continue;
 
-				while (it != terms.end()) {
-					auto& [lhs, rhs] = *rit;
+				for (auto it = terms.begin(); it != terms.end();) {
+					loop_begin:
+					for (auto& [match, replacement]: ctx.rules) {
+						auto rw_begin = it;
+						auto match_it = match.begin();
 
-					MLATU_LOG(LogLevel::INF, "checking ", lhs, " against ", Terms { it, terms.end() });
+						while (it != terms.end() and match_it != match.end()) {
+							if (match_it->kind == TermKind::MANY) {
+								if (it->kind != TermKind::LPAREN)
+									break;  // Goto next rule
 
-					// Rewrite span
-					auto rewrite_begin = it;
-					auto rewrite_end = it;
+								it++, match_it++;
+								it = match_parens(it);
 
-					// Compare terms to current rule.
-					bool match = [&] (auto term_it, auto term_end, auto rule_it, auto rule_end) {
-						while (term_it != term_end and rule_it != rule_end) {
-							if (rule_it->kind == TokenKind::MANY) {
-								if (term_it->kind != TokenKind::LPAREN)
-									return false;
-
-								term_it++, rule_it++;
-
-								for (size_t depth = 1; depth > 0; ++term_it)
-									switch (term_it->kind) {
-										case TokenKind::LPAREN:
-											depth++; break;
-
-										case TokenKind::RPAREN:
-											depth--; break;
-
-										default: break;
-									}
-
-								continue;
+								continue;  // Skip incrementing iterators at the end of loop.
 							}
 
-							// Check if term matches rule
-							else if (not (*term_it == *rule_it))
-								return false;
+							else if (not (*it == *match_it))
+								break;  // Goto next rule
 
-							term_it++; rule_it++;
+							it++; match_it++;
 						}
 
-						if (rule_it != rule_end)
-							return false;
+						if (match_it == match.end()) {
+							MLATU_LOG(LogLevel::WRN, Terms { rw_begin, it });
+							MLATU_LOG(LogLevel::WRN, "   ", match, " => ", replacement);
 
-						rewrite_end = term_it;  // Span of terms to rewrite.
-						return true;
-					} (it, terms.end(), lhs.begin(), lhs.end());
+							it = terms.erase(rw_begin, it);
+							it = terms.insert(rw_begin, replacement.begin(), replacement.end());
 
+							it = terms.begin();
 
-					if (not match) {
-						++rit;
-
-						if (rit == ctx.rules.end()) {
-							MLATU_LOG(LogLevel::ERR, MLATU_BOLD "no matches!" MLATU_RESET);
-							it++;
-							rit = ctx.rules.begin();
+							goto loop_begin;
 						}
 
-						continue;
+						it = rw_begin;
+						MLATU_LOG(LogLevel::ERR, Terms { it, terms.end() });
 					}
 
-
-					MLATU_LOG(LogLevel::WRN, MLATU_BOLD "  match! ", lhs, " => ", rhs, MLATU_RESET);
-
-					// Erase rewrite span and insert the reduction.
-					it = terms.erase(rewrite_begin, rewrite_end);
-					it = terms.insert(rewrite_begin, rhs.begin(), rhs.end());
-
-					// Go back to the beginning.
-					it = terms.begin();
-					rit = ctx.rules.begin();
-
-					MLATU_LOG(LogLevel::OK, "    terms = ", terms);
+					it++;
 				}
 
 				cb(terms);  // User callback.
 			}
 
-			else if (lx.peek.kind == TokenKind::ASSIGN) {
+			else if (lx.peek.kind == TermKind::ASSIGN) {
 				size_t sep = std::distance(terms.begin(), terms.end());
 
-				Token assign = take(lx);
+				Term assign = take(lx);
 
 				while (is_term(lx.peek))
 					term(ctx, lx, terms);
 
-				expect(lx, is(TokenKind::END), ErrorKind::EXPECT_END);
-				Token end = take(lx);
+				expect(lx, is(TermKind::END), ErrorKind::EXPECT_END);
+				Term end = take(lx);
 
 				auto& [lhs, rhs] = ctx.rules.emplace_back();
 

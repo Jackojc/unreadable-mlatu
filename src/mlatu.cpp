@@ -41,7 +41,7 @@ int main(int argc, const char* argv[]) {
 		auto t1 = std::chrono::steady_clock::now();
 
 		Lexer lx { sv };
-		Token tok = take(lx);  // Prepare the lexer.
+		Term t = take(lx);  // Prepare the lexer.
 
 		Context ctx {};
 		Terms ts = execute(ctx, lx, [&] (Terms x) {
