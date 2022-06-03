@@ -538,31 +538,22 @@ namespace mlatu {
 					// Compare terms to current rule.
 					bool match = [&] (auto term_it, auto term_end, auto rule_it, auto rule_end) {
 						while (term_it != term_end and rule_it != rule_end) {
-							// MLATU_LOG(LogLevel::INF, *term_it, " == ", *rule_it);
-
-							// If we find a wildcard term, loop until we
-							// find the next term in the rule _or_ until
-							// we have no more terms.
 							if (rule_it->kind == TokenKind::MANY) {
-								rule_it++;
-								size_t depth = 1;
-
 								if (term_it->kind != TokenKind::LPAREN)
 									return false;
-								term_it++;
 
-								// Loop until we hit the next term.
-								while (depth > 0) {
-									if      (term_it->kind == TokenKind::LPAREN) depth++;
-									else if (term_it->kind == TokenKind::RPAREN) depth--;
+								term_it++, rule_it++;
 
-									term_it++;
-								}
+								for (size_t depth = 1; depth > 0; ++term_it)
+									switch (term_it->kind) {
+										case TokenKind::LPAREN:
+											depth++; break;
 
-								// If the wildcard spans the entire array of
-								// terms, return false.
-								// if (term_it == term_end)
-								// 	return false;
+										case TokenKind::RPAREN:
+											depth--; break;
+
+										default: break;
+									}
 
 								continue;
 							}
@@ -581,9 +572,7 @@ namespace mlatu {
 						return true;
 					} (it, terms.end(), lhs.begin(), lhs.end());
 
-					// With no match, we move to the next rule and if we have
-					// checked _all_ rules, we increment the current term iterator
-					// and restart the rule search.
+
 					if (not match) {
 						++rit;
 
@@ -595,6 +584,7 @@ namespace mlatu {
 
 						continue;
 					}
+
 
 					MLATU_LOG(LogLevel::WRN, MLATU_BOLD "  match! ", lhs, " => ", rhs, MLATU_RESET);
 
