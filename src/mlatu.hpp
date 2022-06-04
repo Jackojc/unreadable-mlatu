@@ -500,6 +500,9 @@ namespace mlatu {
 	using Terms = std::vector<Term>;
 
 	inline std::ostream& operator<<(std::ostream& os, const Terms& x) {
+		if (x.empty())
+			return print(os, "[]");
+
 		print(os, '[', x.front().sv);
 
 		for (auto it = x.begin() + 1; it != x.end(); ++it)
@@ -517,19 +520,6 @@ namespace mlatu {
 			TermKind::LPAREN,
 			TermKind::MANY,
 			TermKind::IDENT);
-	}
-
-	inline Terms::iterator match_parens(Terms::iterator it) {
-		size_t depth = 1;
-
-		while (depth > 0) {
-			if      (it->kind == TermKind::LPAREN) depth++;
-			else if (it->kind == TermKind::RPAREN) depth--;
-
-			it++;
-		}
-
-		return it;
 	}
 
 	inline void term(Context& ctx, Lexer& lx, Terms& terms) {
@@ -618,8 +608,10 @@ namespace mlatu {
 						}
 
 						if (match_it == match.end()) {
-							MLATU_LOG(LogLevel::WRN, Terms { rw_begin, it });
-							MLATU_LOG(LogLevel::WRN, "   ", match, " => ", replacement);
+							MLATU_LOG(LogLevel::WRN, "match!");
+							MLATU_LOG(LogLevel::WRN, "  terms = ", terms);
+							MLATU_LOG(LogLevel::WRN, "  match = ", Terms { rw_begin, it }, " (offset: ", std::distance(terms.begin(), rw_begin), ")");
+							MLATU_LOG(LogLevel::WRN, "  redex = ", match, " => ", replacement);
 
 							it = terms.erase(rw_begin, it);
 							it = terms.insert(it, replacement.begin(), replacement.end());
@@ -637,21 +629,19 @@ namespace mlatu {
 
 								Terms& quote = quote_it->second;
 
-								MLATU_LOG(LogLevel::WRN, "bind ", bind_it->sv, " => ", quote);
-
 								bind_it = terms.erase(bind_it);
 								bind_it = terms.insert(bind_it, quote.begin(), quote.end());
 							}
 
 							it = terms.begin();
 
+							MLATU_LOG(LogLevel::WRN, "  new   = ", terms);
+
 							bindings.clear();
 							goto loop_begin;
 						}
 
 						it = rw_begin;
-						MLATU_LOG(LogLevel::ERR, Terms { it, terms.end() });
-
 						bindings.clear();
 					}
 
