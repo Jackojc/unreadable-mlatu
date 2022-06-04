@@ -10,6 +10,7 @@
 
 	#include <utility>
 	#include <algorithm>
+	#include <unordered_map>
 	#include <vector>
 	#include <iostream>
 	#include <cstddef>
@@ -172,6 +173,20 @@ namespace mlatu {
 			return ptr - str;
 		}
 	}
+
+	constexpr auto hash_bytes(const char* begin, const char* const end) {
+		size_t offset_basis = 14'695'981'039'346'656'037u;
+		size_t prime = 1'099'511'628'211u;
+
+		size_t hash = offset_basis;
+
+		while (begin != end) {
+			hash = (hash ^ static_cast<size_t>(*begin)) * prime;
+			begin++;
+		}
+
+		return hash;
+	}
 }
 
 // String view
@@ -213,6 +228,14 @@ namespace mlatu {
 		return true;
 	}
 
+	constexpr bool operator==(View lhs, View rhs) {
+		return cmp(lhs, rhs);
+	}
+
+	constexpr bool operator!=(View lhs, View rhs) {
+		return not(lhs == rhs);
+	}
+
 	[[nodiscard]] constexpr bool empty(View sv) {
 		return sv.begin == sv.end;
 	}
@@ -225,6 +248,14 @@ namespace mlatu {
 
 constexpr mlatu::View operator""_sv(const char* str, size_t n) {
 	return { str, str + n };
+}
+
+namespace std {
+	template <> struct hash<mlatu::View> {
+		constexpr size_t operator()(mlatu::View v) const {
+			return mlatu::hash_bytes(v.begin, v.end);
+		}
+	};
 }
 
 namespace mlatu {
@@ -274,7 +305,8 @@ namespace mlatu {
 		X(EXPECT_TERM,      "expected term") \
 		X(EXPECT_RPAREN,    "expected `)`") \
 		X(EXPECT_STATEMENT, "expected `?` or `=`") \
-		X(EXPECT_IDENT,     "expected identifier")
+		X(EXPECT_IDENT,     "expected identifier") \
+		X(UNBOUND_QUOTE,    "referenced quote is unbound")
 
 	#define X(a, b) a,
 		enum class ErrorKind: size_t { ERROR_KINDS };
@@ -531,6 +563,7 @@ namespace mlatu {
 			if (lx.peek.kind == TermKind::QUERY) {
 				Term query = take(lx);
 
+				// Sort rules by largest to smallest and preserve definition order.
 				std::stable_sort(ctx.rules.begin(), ctx.rules.end(), [] (auto& lhs, auto& rhs) {
 					return lhs.first.size() > rhs.first.size();
 				});
@@ -538,19 +571,42 @@ namespace mlatu {
 				if (ctx.rules.empty())
 					continue;
 
+				std::unordered_map<View, Terms> bindings;
+
 				for (auto it = terms.begin(); it != terms.end();) {
 					loop_begin:
+
 					for (auto& [match, replacement]: ctx.rules) {
 						auto rw_begin = it;
 						auto match_it = match.begin();
 
 						while (it != terms.end() and match_it != match.end()) {
 							if (match_it->kind == TermKind::MANY) {
+								View bind = match_it->sv;
+
 								if (it->kind != TermKind::LPAREN)
 									break;  // Goto next rule
 
 								it++, match_it++;
-								it = match_parens(it);
+
+								auto bind_it = it;
+								auto bind_end = it;
+
+								size_t depth = 1;
+
+								while (depth > 0) {
+									bind_end = it;
+
+									if (it->kind == TermKind::LPAREN)
+										depth++;
+
+									else if (it->kind == TermKind::RPAREN)
+										depth--;
+
+									it++;
+								}
+
+								bindings.try_emplace(bind, bind_it, bind_end);
 
 								continue;  // Skip incrementing iterators at the end of loop.
 							}
@@ -566,15 +622,37 @@ namespace mlatu {
 							MLATU_LOG(LogLevel::WRN, "   ", match, " => ", replacement);
 
 							it = terms.erase(rw_begin, it);
-							it = terms.insert(rw_begin, replacement.begin(), replacement.end());
+							it = terms.insert(it, replacement.begin(), replacement.end());
+
+							for (auto bind_it = it; bind_it != terms.end();) {
+								if (bind_it->kind != TermKind::MANY) {
+									++bind_it;
+									continue;
+								}
+
+								auto quote_it = bindings.find(bind_it->sv);
+
+								if (quote_it == bindings.end())
+									report(lx.peek.sv, ErrorKind::UNBOUND_QUOTE);
+
+								Terms& quote = quote_it->second;
+
+								MLATU_LOG(LogLevel::WRN, "bind ", bind_it->sv, " => ", quote);
+
+								bind_it = terms.erase(bind_it);
+								bind_it = terms.insert(bind_it, quote.begin(), quote.end());
+							}
 
 							it = terms.begin();
 
+							bindings.clear();
 							goto loop_begin;
 						}
 
 						it = rw_begin;
 						MLATU_LOG(LogLevel::ERR, Terms { it, terms.end() });
+
+						bindings.clear();
 					}
 
 					it++;

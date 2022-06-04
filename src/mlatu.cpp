@@ -1,6 +1,7 @@
 #include <utility>
 #include <algorithm>
 #include <vector>
+#include <unordered_map>
 #include <string>
 #include <string_view>
 #include <filesystem>
@@ -49,7 +50,8 @@ int main(int argc, const char* argv[]) {
 		});
 
 		auto t2 = std::chrono::steady_clock::now();
-		MLATU_LOG(LogLevel::OK, std::chrono::duration<double, std::micro> { t2 - t1 }.count(), "µs");
+		// MLATU_LOG(LogLevel::OK, std::chrono::duration<double, std::micro> { t2 - t1 }.count(), "µs");
+		println(std::cerr, std::chrono::duration<double, std::micro> { t2 - t1 }.count(), "µs");
 	}
 
 	catch (Report x) {
