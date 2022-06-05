@@ -1,9 +1,8 @@
 word ::= ? .+ ?
+pattern ::= ? \*.+ ?
 
-rule ::= <nq_term>+ '=' <term>* '.'
+rule ::= ( <term> | <pattern> )+ '=' ( <term> | <pattern> )* '.'
 query ::= <term>+ '?'
 
-nq_term ::= '+' | '-' | '<' | '>' | ',' | '~' | <word>
-term ::= <nq_term> | '(' <term>* ')'
-
+term ::= <word> | '(' <term>* ')'
 program ::= ( <rule> | <query> )*
